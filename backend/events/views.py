@@ -2,25 +2,29 @@ from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .models import Event, DecisionLog
-from .serializers import EventSerializer
+from .models import Event, RegisteredStudent, DecisionLog, Feedback
+from .serializers import EventSerializer, FeedbackSerializer, RegisteredStudentSerializer
 from users.models import User
+from .permissions import IsAdmin, IsHOD, IsPrincipal, IsStudent
 
+class EventCreateView(APIView):
+    """
+    API View for creating events (accessible only to Admin).
+    """
+    permission_classes = [IsAdmin]
 
-# Admin: Create Event
-class EventCreateView(generics.CreateAPIView):
-    serializer_class = EventSerializer
-    permission_classes = [IsAuthenticated]
-
-    def perform_create(self, serializer):
-        # Save event with the current admin user as the creator
-        serializer.save(created_by=self.request.user)
+    def post(self, request):
+        serializer = EventSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(created_by=request.user)  # Ensure the creator is set
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 # Admin: List Created Events
 class AdminEventListView(generics.ListAPIView):
     serializer_class = EventSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdmin]
 
     def get_queryset(self):
         # Return only events created by the current admin
@@ -30,7 +34,7 @@ class AdminEventListView(generics.ListAPIView):
 # Admin: Edit and Resubmit Event
 class AdminEditEventView(generics.RetrieveUpdateAPIView):
     serializer_class = EventSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdmin]
 
     def get_queryset(self):
         # Admin can only edit events that they created and were rejected
@@ -41,64 +45,86 @@ class AdminEditEventView(generics.RetrieveUpdateAPIView):
         serializer.save(status='PENDING')
 
 
+# Admin: Delete Event
+class AdminDeleteEventView(generics.DestroyAPIView):
+    permission_classes = [IsAdmin]
+
+    def get_queryset(self):
+        # Admin can only delete events that they created
+        return Event.objects.filter(created_by=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        # Get the event object
+        event = self.get_object()
+        # Delete the event
+        event.delete()
+        return Response({"message": "Event deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+
+
 # HOD: View and Approve/Reject Events
 class HODEventApprovalView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsHOD]
 
     def post(self, request, event_id):
-        hod = request.user
-        event = Event.objects.get(id=event_id, created_by__branch=hod.branch)
-        action = request.data.get('action')  # "approve", "reject", or "hold"
+        try:
+            hod = request.user
+            event = Event.objects.get(id=event_id, created_by__branch=hod.branch)
+            action = request.data.get('action')  # "approve", "reject", or "hold"
 
-        if action == 'approve':
-            event.status = 'APPROVED_BY_HOD'
-            decision = "Approved"
-        elif action == 'reject':
-            event.status = 'REJECTED_BY_HOD'
-            decision = "Rejected"
-        else:
-            event.status = 'PENDING'
-            decision = "Held"
+            if action == 'approve':
+                event.status = 'APPROVED_BY_HOD'
+                decision = "Approved"
+            elif action == 'reject':
+                event.status = 'REJECTED_BY_HOD'
+                decision = "Rejected"
+            else:
+                event.status = 'HOLD'
+                decision = "Held"
 
-        event.save()
+            event.save()
 
-        # Log the decision
-        DecisionLog.objects.create(event=event, decision_by=hod, decision=decision)
+            # Log the decision
+            DecisionLog.objects.create(event=event, decision_by=hod, decision=decision)
 
-        return Response({"status": event.status}, status=status.HTTP_200_OK)
+            return Response({"status": event.status}, status=status.HTTP_200_OK)
+        except Event.DoesNotExist:
+            return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 # Principal: View and Approve/Reject Events
 class PrincipalEventApprovalView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsPrincipal]
 
     def post(self, request, event_id):
-        principal = request.user
-        event = Event.objects.get(id=event_id, status='APPROVED_BY_HOD')
-        action = request.data.get('action')  # "approve", "reject", or "hold"
+        try:
+            principal = request.user
+            event = Event.objects.get(id=event_id, status='APPROVED_BY_HOD')
+            action = request.data.get('action')  # "approve", "reject", or "hold"
 
-        if action == 'approve':
-            event.status = 'APPROVED_BY_PRINCIPAL'
-            decision = "Approved"
-        elif action == 'reject':
-            event.status = 'REJECTED_BY_PRINCIPAL'
-            decision = "Rejected"
-        else:
-            event.status = 'PENDING'
-            decision = "Held"
+            if action == 'approve':
+                event.status = 'APPROVED_BY_PRINCIPAL'
+                decision = "Approved"
+            elif action == 'reject':
+                event.status = 'REJECTED_BY_PRINCIPAL'
+                decision = "Rejected"
+            else:
+                event.status = 'HOLD'
+                decision = "Held"
 
-        event.save()
+            event.save()
 
-        # Log the decision
-        DecisionLog.objects.create(event=event, decision_by=principal, decision=decision)
+            # Log the decision
+            DecisionLog.objects.create(event=event, decision_by=principal, decision=decision)
 
-        return Response({"status": event.status}, status=status.HTTP_200_OK)
+            return Response({"status": event.status}, status=status.HTTP_200_OK)
+        except Event.DoesNotExist:
+            return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 # Student: View Events and Register
 class StudentEventListView(generics.ListAPIView):
     serializer_class = EventSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsStudent]
 
     def get_queryset(self):
         student = self.request.user
@@ -107,44 +133,99 @@ class StudentEventListView(generics.ListAPIView):
 
 
 class EventRegisterView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsStudent]
 
     def post(self, request, event_id):
-        event = Event.objects.get(id=event_id, status='APPROVED_BY_PRINCIPAL')
-        event.registered_students.add(request.user)
-        return Response({"message": "Successfully registered for the event"}, status=status.HTTP_200_OK)
+        try:
+            event = Event.objects.get(id=event_id, status='APPROVED_BY_PRINCIPAL')
+            usn = request.data.get('usn')
+            college_email = request.data.get('college_email')
+
+            if event.registered_students_details.count() < event.participants_limit:
+                registered_student = RegisteredStudent.objects.create(
+                    user=request.user,
+                    event=event,
+                    usn=usn,
+                    college_email=college_email
+                )
+                return Response({"message": "Successfully registered for the event", "usn": registered_student.usn}, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": "Event is full"}, status=status.HTTP_400_BAD_REQUEST)
+        except Event.DoesNotExist:
+            return Response({"error": "Event not found or not approved"}, status=status.HTTP_404_NOT_FOUND)
 
 
-# HOD: Dashboard View (View Events by Branch)
-class HODDashboardView(APIView):
-    permission_classes = [IsAuthenticated]
+# Admin: Manage Registered Students
+class AdminManageRegisteredStudentsView(APIView):
+    permission_classes = [IsAdmin]
 
-    def get(self, request):
-        hod = request.user
-        # Fetch events created by admin of the same branch, pending approval
-        branch_events = Event.objects.filter(created_by__branch=hod.branch, status='PENDING')
+    def get(self, request, event_id):
+        # Get registered students for a specific event
+        try:
+            event = Event.objects.get(id=event_id)
+            registered_students = event.registered_students_details.all()
+            data = RegisteredStudentSerializer(registered_students, many=True).data
+            return Response(data, status=status.HTTP_200_OK)
+        except Event.DoesNotExist:
+            return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Fetch rejected events for HOD's reference
-        rejected_events = Event.objects.filter(created_by__branch=hod.branch, status='REJECTED_BY_HOD')
+    def delete(self, request, event_id, student_id):
+        # Admin can delete a registered student from an event
+        try:
+            registered_student = RegisteredStudent.objects.get(id=student_id, event_id=event_id)
+            registered_student.delete()
+            return Response({"message": "Student registration deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+        except RegisteredStudent.DoesNotExist:
+            return Response({"error": "Registered student not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        data = {
-            "pending_approval_events": EventSerializer(branch_events, many=True).data,
-            "rejected_events": EventSerializer(rejected_events, many=True).data,
-        }
+    def post(self, request, event_id):
+        # Admin can add a student to an event
+        usn = request.data.get('usn')
+        college_email = request.data.get('college_email')
+        
+        try:
+            user = User.objects.get(email=college_email)  # Assuming you are matching by college email
+            RegisteredStudent.objects.create(user=user, event_id=event_id, usn=usn, college_email=college_email)
+            return Response({"message": "Student registered successfully"}, status=status.HTTP_201_CREATED)
+        except User.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        return Response(data, status=status.HTTP_200_OK)
+
+# Student: View Registered Events
+class StudentRegisteredEventsView(generics.ListAPIView):
+    serializer_class = RegisteredStudentSerializer
+    permission_classes = [IsStudent]
+
+    def get_queryset(self):
+        student = self.request.user
+        return RegisteredStudent.objects.filter(user=student)
 
 
-# Principal: Dashboard View (View HOD Approved Events)
-class PrincipalDashboardView(APIView):
-    permission_classes = [IsAuthenticated]
+# Student: Submit Feedback
+class StudentSubmitFeedbackView(APIView):
+    permission_classes = [IsStudent]
 
-    def get(self, request):
-        # Fetch all events approved by HOD and awaiting Principal's decision
-        hod_approved_events = Event.objects.filter(status='APPROVED_BY_HOD')
+    def post(self, request, event_id):
+        try:
+            event = Event.objects.get(id=event_id)
+            feedback_text = request.data.get('feedback_text')
 
-        data = {
-            "hod_approved_events": EventSerializer(hod_approved_events, many=True).data,
-        }
+            # Create feedback entry
+            feedback = Feedback.objects.create(event=event, student=request.user, feedback_text=feedback_text)
+            return Response({"message": "Feedback submitted successfully."}, status=status.HTTP_201_CREATED)
+        except Event.DoesNotExist:
+            return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        return Response(data, status=status.HTTP_200_OK)
+
+# Admin: View Feedback
+class AdminViewFeedbackView(APIView):
+    permission_classes = [IsAdmin]
+
+    def get(self, request, event_id):
+        try:
+            event = Event.objects.get(id=event_id)
+            feedbacks = event.feedbacks.all()  # Get feedbacks related to the event
+            serializer = FeedbackSerializer(feedbacks, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Event.DoesNotExist:
+            return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)

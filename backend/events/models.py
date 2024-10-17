@@ -1,3 +1,5 @@
+# models.py in events folder
+
 from django.db import models
 from users.models import User  # Assuming User model is in users app
 
@@ -25,12 +27,32 @@ class Event(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='created_events')
     hod = models.ForeignKey(User, on_delete=models.CASCADE, related_name='hod_events', null=True, blank=True)
     principal = models.ForeignKey(User, on_delete=models.CASCADE, related_name='principal_events', null=True, blank=True)
-    registered_students = models.ManyToManyField(User, related_name='registered_events', blank=True)
     admin_contact_number = models.CharField(max_length=15)
     admin_email = models.EmailField()
+    feedback_sent = models.BooleanField(default=False)  # New field
 
     def __str__(self):
         return self.title
+
+
+class RegisteredStudent(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='registered_students_details')
+    usn = models.CharField(max_length=15)  # Add field for USN
+    college_email = models.EmailField()  # Add field for college email
+
+    def __str__(self):
+        return f'{self.user.email} registered for {self.event.title}'
+
+
+class Feedback(models.Model):
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='feedbacks')
+    student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='feedbacks')
+    feedback_text = models.TextField()
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Feedback from {self.student.email} for {self.event.title}"
 
 
 class DecisionLog(models.Model):
